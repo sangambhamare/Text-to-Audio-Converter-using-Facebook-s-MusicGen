@@ -1,19 +1,24 @@
-import gradio as gr
+import streamlit as st
 import torch
 import numpy as np
+import io
 from transformers import AutoProcessor, MusicgenForConditionalGeneration
 import soundfile as sf
-from tempfile import NamedTemporaryFile
 
-# Load the processor and model globally (this may take some time the first time you run it)
-processor = AutoProcessor.from_pretrained("facebook/musicgen-medium")
-model = MusicgenForConditionalGeneration.from_pretrained("facebook/musicgen-medium")
+# Load the processor and model globally (this may take some time on first run)
+@st.cache_resource(show_spinner="Loading model...")
+def load_model():
+    processor = AutoProcessor.from_pretrained("facebook/musicgen-medium")
+    model = MusicgenForConditionalGeneration.from_pretrained("facebook/musicgen-medium")
+    return processor, model
+
+processor, model = load_model()
 
 def text_to_audio(prompt: str):
     """
-    Given a text prompt, generate an audio sample using MusicGen and return the audio file path.
+    Given a text prompt, generate an audio sample using MusicGen and return audio as a byte stream.
     """
-    # Prepare the input: here we wrap the prompt in a list.
+    # Prepare the input by wrapping the prompt in a list.
     inputs = processor(
         text=[prompt],
         padding=True,
@@ -21,30 +26,35 @@ def text_to_audio(prompt: str):
     )
     
     # Generate audio using the model.
-    # The max_new_tokens parameter may be adjusted based on desired audio length.
     audio_tensor = model.generate(**inputs, max_new_tokens=256)
     
-    # The generated audio is a tensor. Convert it to a NumPy array.
-    # (Assume the model returns a tensor of shape [1, num_samples])
+    # Convert the generated audio tensor to a NumPy array.
     audio_np = audio_tensor[0].cpu().numpy()
     
-    # Write the audio sample to a temporary WAV file.
+    # Write the audio sample to an in-memory WAV file.
+    audio_buffer = io.BytesIO()
     # MusicGen typically generates audio at 32000 Hz.
-    temp_wav = NamedTemporaryFile(suffix=".wav", delete=False)
-    sf.write(temp_wav.name, audio_np, samplerate=32000)
+    sf.write(audio_buffer, audio_np, samplerate=32000, format="WAV")
+    audio_buffer.seek(0)
     
-    # Return the path to the audio file.
-    return temp_wav.name
+    return audio_buffer
 
-# Define a Gradio interface:
-iface = gr.Interface(
-    fn=text_to_audio,
-    inputs=gr.Textbox(lines=5, placeholder="Enter a description, e.g., '80s pop track with bassy drums and synth'", label="Text Prompt"),
-    outputs=gr.Audio(label="Generated Audio"),
-    title="Text to Audio Converter",
-    description="Enter your text prompt to generate audio using Facebook's MusicGen model."
-)
+# Set up the Streamlit interface
+st.title("Text-to-Audio Converter")
+st.markdown("""
+Enter your text prompt to generate audio using Facebook's MusicGen model.
+For example: *80s pop track with bassy drums and synth*.
+""")
 
-# Launch the interface.
-if __name__ == "__main__":
-    iface.launch()
+# Text input for the prompt.
+prompt = st.text_area("Enter a description", height=150)
+
+# Generate the audio when the user clicks the button.
+if st.button("Generate Audio"):
+    if prompt.strip() == "":
+        st.error("Please enter a valid text prompt!")
+    else:
+        with st.spinner("Generating audio..."):
+            audio_bytes = text_to_audio(prompt)
+        st.success("Audio generated!")
+        st.audio(audio_bytes, format="audio/wav")
